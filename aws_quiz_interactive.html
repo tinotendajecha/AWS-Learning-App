@@ -144,6 +144,7 @@
     </div>
     <div class="row" style="margin-top:10px;">
       <button id="reviewChallengesBtn" type="button" class="secondary">Review Challenging Concepts</button>
+      <button id="exportChallengesCsvBtn" type="button" class="calm">Export Challenging CSV</button>
     </div>
     <div id="challengingConceptsBox" class="explain hidden">
       <h3>Challenging Concepts</h3>
@@ -337,6 +338,74 @@ function renderChallengeConcepts() {
       <div class="small"><strong>Concept:</strong> ${escapeHtml(item.explanation || 'No explanation found.')}</div>
     </div>
   `).join('');
+}
+function escapeCsvValue(value) {
+  const text = String(value ?? '');
+  if (text.includes('"') || text.includes(',') || text.includes('\n') || text.includes('\r')) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+function buildChallengesCsv(items) {
+  const headers = [
+    'question_number',
+    'question',
+    'answer_list',
+    'concept_explanation',
+    'added_from',
+    'updated_at',
+    'ai_prompt'
+  ];
+
+  const lines = [headers.join(',')];
+  for (const item of items) {
+    const aiPrompt = `I am preparing for AWS exam. I keep missing this concept. Give me key topics to revise, why this question matters, and 5 targeted practice points. Question: ${item.question}`;
+    const row = [
+      item.questionNumber,
+      item.question,
+      (item.answerList || []).join(', '),
+      item.explanation || 'No explanation found.',
+      item.addedFrom || 'manual',
+      item.updatedAt || '',
+      aiPrompt
+    ].map(escapeCsvValue);
+    lines.push(row.join(','));
+  }
+  return lines.join('\n');
+}
+function downloadCsv(filename, csvContent) {
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+async function exportChallengesCsv() {
+  const exportBtn = document.getElementById('exportChallengesCsvBtn');
+  const initialLabel = exportBtn.textContent;
+  exportBtn.disabled = true;
+  exportBtn.textContent = 'Preparing CSV...';
+
+  await fetchChallengingFromApi();
+  const items = getChallengeItemsForDisplay();
+
+  if (!items.length) {
+    alert('No challenging questions saved yet. Mark questions first, then export.');
+    exportBtn.textContent = initialLabel;
+    exportBtn.disabled = false;
+    return;
+  }
+
+  const csv = buildChallengesCsv(items);
+  const datePart = new Date().toISOString().slice(0, 10);
+  downloadCsv(`aws-challenging-concepts-${datePart}.csv`, csv);
+
+  exportBtn.textContent = initialLabel;
+  exportBtn.disabled = false;
 }
 function markQuestionAsChallenging(question, addedFrom) {
   challengingSet.add(question.number);
@@ -591,6 +660,7 @@ document.getElementById('studyPrevBtn').addEventListener('click', () => { curren
 document.getElementById('studyNextBtn').addEventListener('click', () => { currentIndex = Math.min(filtered.length - 1, currentIndex + 1); renderStudy(); });
 document.getElementById('randomStudyBtn').addEventListener('click', () => { if (filtered.length) { currentIndex = Math.floor(Math.random() * filtered.length); renderStudy(); } });
 document.getElementById('markChallengingBtn').addEventListener('click', toggleCurrentChallenge);
+document.getElementById('exportChallengesCsvBtn').addEventListener('click', exportChallengesCsv);
 document.getElementById('reviewChallengesBtn').addEventListener('click', async () => {
   const box = document.getElementById('challengingConceptsBox');
   const shouldShow = box.classList.contains('hidden');
