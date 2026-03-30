@@ -101,13 +101,36 @@
     background:#ffffff;
   }
   .concept-item .small { margin:6px 0 0; }
+  .toggle-grid {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:10px;
+    margin-top:12px;
+  }
+  .toggle-item {
+    display:flex;
+    align-items:center;
+    gap:10px;
+    border:1px solid var(--border);
+    border-radius:12px;
+    background:#fff;
+    padding:10px 12px;
+    color:var(--text);
+    font-size:14px;
+    font-weight:600;
+  }
+  .toggle-item input {
+    width:auto;
+    transform:scale(1.12);
+    margin:0;
+  }
   .divider { height:1px; background:var(--border); margin:18px 0; }
   @media (max-width: 860px) {
-    .controls, .setup-grid, .stat-grid { grid-template-columns:1fr 1fr; }
+    .controls, .setup-grid, .stat-grid, .toggle-grid { grid-template-columns:1fr 1fr; }
     .question { font-size:21px; }
   }
   @media (max-width: 560px) {
-    .controls, .setup-grid, .stat-grid { grid-template-columns:1fr; }
+    .controls, .setup-grid, .stat-grid, .toggle-grid { grid-template-columns:1fr; }
     .wrap { padding:14px; }
     .card { padding:18px; border-radius:18px; }
     .question { font-size:19px; }
@@ -176,6 +199,16 @@
       </select>
       <button id="startQuizBtn" type="button">Start Quiz</button>
     </div>
+    <div class="toggle-grid">
+      <label class="toggle-item">
+        <input id="noRepeatToggle" type="checkbox" checked />
+        <span>No repeat mode (until all seen)</span>
+      </label>
+      <label class="toggle-item">
+        <input id="removeChallengeOnCorrectToggle" type="checkbox" checked />
+        <span>Auto remove challenging after correct</span>
+      </label>
+    </div>
     <div class="divider"></div>
     <div class="small">Loaded questions: 882 total.</div>
   </section>
@@ -227,8 +260,16 @@ let userAnswers = [];
 let answeredCurrent = false;
 const challengingStorageKey = 'awsQuizChallenging_v1';
 const challengingApiUrl = '/api/challenging';
+const seenQuestionsStorageKey = 'awsQuizSeenQuestions_v1';
+const quizSettingsStorageKey = 'awsQuizSettings_v1';
 let challengingSet = new Set();
 let challengingConceptsByNumber = new Map();
+let seenQuestionsSet = new Set();
+
+let quizSettings = {
+  noRepeatMode: true,
+  removeChallengeOnCorrect: true
+};
 
 function loadChallengingLocal() {
   try {
@@ -243,6 +284,40 @@ function loadChallengingLocal() {
 }
 function saveChallengingLocal() {
   localStorage.setItem(challengingStorageKey, JSON.stringify([...challengingSet]));
+}
+function loadSeenQuestions() {
+  try {
+    const raw = localStorage.getItem(seenQuestionsStorageKey);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+    seenQuestionsSet = new Set(parsed.filter(n => Number.isFinite(n)).map(n => Number(n)));
+  } catch (err) {
+    seenQuestionsSet = new Set();
+  }
+}
+function saveSeenQuestions() {
+  localStorage.setItem(seenQuestionsStorageKey, JSON.stringify([...seenQuestionsSet]));
+}
+function loadQuizSettings() {
+  try {
+    const raw = localStorage.getItem(quizSettingsStorageKey);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    quizSettings = {
+      noRepeatMode: parsed.noRepeatMode !== false,
+      removeChallengeOnCorrect: parsed.removeChallengeOnCorrect !== false
+    };
+  } catch (err) {
+    quizSettings = { noRepeatMode: true, removeChallengeOnCorrect: true };
+  }
+}
+function saveQuizSettings() {
+  localStorage.setItem(quizSettingsStorageKey, JSON.stringify(quizSettings));
+}
+function applyQuizSettingsToUI() {
+  document.getElementById('noRepeatToggle').checked = quizSettings.noRepeatMode;
+  document.getElementById('removeChallengeOnCorrectToggle').checked = quizSettings.removeChallengeOnCorrect;
 }
 function findQuestionByNumber(number) {
   return questions.find(q => q.number === number) || null;
@@ -338,6 +413,15 @@ function renderChallengeConcepts() {
       <div class="small"><strong>Concept:</strong> ${escapeHtml(item.explanation || 'No explanation found.')}</div>
     </div>
   `).join('');
+}
+function removeQuestionFromChallenging(questionNumber) {
+  if (!challengingSet.has(questionNumber)) return;
+  challengingSet.delete(questionNumber);
+  challengingConceptsByNumber.delete(questionNumber);
+  saveChallengingLocal();
+  setChallengeButtonState();
+  renderChallengeConcepts();
+  void removeChallengingFromApi(questionNumber);
 }
 function escapeCsvValue(value) {
   const text = String(value ?? '');
@@ -440,12 +524,7 @@ function toggleCurrentChallenge() {
   if (!filtered.length) return;
   const q = filtered[currentIndex];
   if (challengingSet.has(q.number)) {
-    challengingSet.delete(q.number);
-    challengingConceptsByNumber.delete(q.number);
-    saveChallengingLocal();
-    setChallengeButtonState();
-    renderChallengeConcepts();
-    void removeChallengingFromApi(q.number);
+    removeQuestionFromChallenging(q.number);
   } else {
     markQuestionAsChallenging(q, 'manual');
     return;
@@ -524,6 +603,9 @@ function startQuiz() {
   const source = document.getElementById('quizSource').value;
   const order = document.getElementById('quizOrder').value;
   const requested = Math.max(1, parseInt(document.getElementById('quizCount').value || '20', 10));
+  quizSettings.noRepeatMode = document.getElementById('noRepeatToggle').checked;
+  quizSettings.removeChallengeOnCorrect = document.getElementById('removeChallengeOnCorrectToggle').checked;
+  saveQuizSettings();
   let pool = [];
   if (source === 'filtered') {
     pool = [...filtered];
@@ -532,6 +614,17 @@ function startQuiz() {
   } else {
     pool = [...questions];
   }
+
+  if (quizSettings.noRepeatMode) {
+    const unseen = pool.filter(q => !seenQuestionsSet.has(q.number));
+    if (unseen.length) {
+      pool = unseen;
+    } else {
+      seenQuestionsSet.clear();
+      saveSeenQuestions();
+    }
+  }
+
   if (!pool.length) {
     alert(source === 'challenging'
       ? 'No challenging questions saved yet. Mark questions in Study mode or get questions wrong in a quiz to auto-save them.'
@@ -579,6 +672,13 @@ function submitCurrentAnswer() {
   }
   const correct = isCorrectSelection(q, checked);
   if (correct) score += 1;
+  seenQuestionsSet.add(q.number);
+  saveSeenQuestions();
+
+  if (correct && quizSettings.removeChallengeOnCorrect && challengingSet.has(q.number)) {
+    removeQuestionFromChallenging(q.number);
+  }
+
   if (!correct) {
     markQuestionAsChallenging(q, 'wrong-answer');
   }
@@ -661,6 +761,14 @@ document.getElementById('studyNextBtn').addEventListener('click', () => { curren
 document.getElementById('randomStudyBtn').addEventListener('click', () => { if (filtered.length) { currentIndex = Math.floor(Math.random() * filtered.length); renderStudy(); } });
 document.getElementById('markChallengingBtn').addEventListener('click', toggleCurrentChallenge);
 document.getElementById('exportChallengesCsvBtn').addEventListener('click', exportChallengesCsv);
+document.getElementById('noRepeatToggle').addEventListener('change', (event) => {
+  quizSettings.noRepeatMode = event.target.checked;
+  saveQuizSettings();
+});
+document.getElementById('removeChallengeOnCorrectToggle').addEventListener('change', (event) => {
+  quizSettings.removeChallengeOnCorrect = event.target.checked;
+  saveQuizSettings();
+});
 document.getElementById('reviewChallengesBtn').addEventListener('click', async () => {
   const box = document.getElementById('challengingConceptsBox');
   const shouldShow = box.classList.contains('hidden');
@@ -684,6 +792,9 @@ document.getElementById('reviewWrongBtn').addEventListener('click', renderWrongA
 document.getElementById('restartQuizBtn').addEventListener('click', () => { switchMode(true); });
 document.getElementById('backToStudyBtn').addEventListener('click', () => { switchMode(false); });
 
+loadQuizSettings();
+applyQuizSettingsToUI();
+loadSeenQuestions();
 void hydrateChallenging();
 renderStudy();
 </script>
