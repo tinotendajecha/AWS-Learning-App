@@ -1,14 +1,27 @@
 # AWS Learning App (Vercel + Turso)
 
-This app is a mobile-friendly AWS quiz page with persistent "challenging concepts" storage.
+This app is a mobile-friendly AWS quiz page with user-aware persistence.
+
+Users must enter an email before they can use quiz/study features.
 
 ## What is persisted
 
-When you mark a study question as challenging, or answer a quiz question incorrectly, it is saved in Turso via:
+When a user marks a study question as challenging, or answers a quiz question incorrectly, it is saved in Turso under that user account.
 
-- `POST /api/challenging` to upsert concept
-- `GET /api/challenging` to load concepts
-- `DELETE /api/challenging?number=<questionNumber>` to remove
+User tracking:
+
+- `POST /api/users` to register/update last-seen for the entered email
+
+Challenging concepts (per user):
+
+- `POST /api/challenging` with `email` to upsert concept
+- `GET /api/challenging?email=<email>` to load only that user's concepts
+- `DELETE /api/challenging?number=<questionNumber>&email=<email>` to remove for that user
+
+Question quality flags:
+
+- `POST /api/question-flags` with `email` + `number` to flag a question
+- `GET /api/question-flags?number=<questionNumber>&email=<email>` to fetch total flag count and whether current user flagged it
 
 ## Local development
 
@@ -47,3 +60,4 @@ The root route (`/`) is rewritten to `aws_quiz_interactive.html`.
 
 - If Turso is unavailable, the page still keeps local browser fallback for your current device.
 - Cross-device persistence works when the API can reach Turso successfully.
+- Local browser fallback is now scoped by email so different users on the same device do not mix challenging history.

@@ -124,13 +124,49 @@
     transform:scale(1.12);
     margin:0;
   }
+  .auth-row {
+    display:grid;
+    grid-template-columns: 1.4fr 0.8fr 0.8fr;
+    gap:10px;
+    margin-top:12px;
+  }
+  .user-badge {
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:12px;
+    border:1px solid rgba(255,255,255,0.3);
+    background:rgba(2,6,23,0.45);
+    color:#f8fafc;
+    padding:0 12px;
+    min-height:44px;
+    font-size:13px;
+    font-weight:700;
+    text-align:center;
+  }
+  .link-button {
+    border:none;
+    background:transparent;
+    color:#0369a1;
+    padding:0;
+    width:auto;
+    font-weight:700;
+    text-decoration:underline;
+    cursor:pointer;
+  }
+  .flag-status {
+    margin-top:8px;
+    font-size:13px;
+    color:#92400e;
+    font-weight:700;
+  }
   .divider { height:1px; background:var(--border); margin:18px 0; }
   @media (max-width: 860px) {
-    .controls, .setup-grid, .stat-grid, .toggle-grid { grid-template-columns:1fr 1fr; }
+    .controls, .setup-grid, .stat-grid, .toggle-grid, .auth-row { grid-template-columns:1fr 1fr; }
     .question { font-size:21px; }
   }
   @media (max-width: 560px) {
-    .controls, .setup-grid, .stat-grid, .toggle-grid { grid-template-columns:1fr; }
+    .controls, .setup-grid, .stat-grid, .toggle-grid, .auth-row { grid-template-columns:1fr; }
     .wrap { padding:14px; }
     .card { padding:18px; border-radius:18px; }
     .question { font-size:19px; }
@@ -148,6 +184,12 @@
       <button class="secondary" id="randomStudyBtn" type="button">Random</button>
       <button class="ghost" id="switchModeBtn" type="button">Switch to Quiz Mode</button>
     </div>
+    <div class="auth-row">
+      <input id="emailInput" type="email" placeholder="Enter your email to use the app" autocomplete="email" />
+      <button id="saveEmailBtn" type="button">Use Email</button>
+      <div id="currentUserBadge" class="user-badge">Not signed in</div>
+    </div>
+    <p class="small" id="authMessage" style="margin-top:10px; color:#fde68a;">Enter your email to start using the app.</p>
   </div>
 
   <section id="studySection" class="card">
@@ -156,6 +198,8 @@
       <span class="pill" id="studyQCount">0</span>
     </div>
     <div class="question" id="studyQuestionText">Loading...</div>
+    <button id="flagStudyQuestionBtn" type="button" class="link-button">Vote this answer is wrong (0)</button>
+    <div id="studyFlagStatus" class="flag-status"></div>
     <div id="studyOptionsBox"></div>
     <div class="row study-nav">
       <button class="secondary" id="studyPrevBtn" type="button">Previous</button>
@@ -220,6 +264,8 @@
       <span class="pill" id="quizTypePill">Single answer</span>
     </div>
     <div class="question" id="quizQuestionText"></div>
+    <button id="flagQuizQuestionBtn" type="button" class="link-button">Vote this answer is wrong (0)</button>
+    <div id="quizFlagStatus" class="flag-status"></div>
     <div id="quizOptionsBox"></div>
     <div class="row" style="margin-top:14px;">
       <button id="submitAnswerBtn" type="button">Submit Answer</button>
@@ -260,20 +306,143 @@ let userAnswers = [];
 let answeredCurrent = false;
 const challengingStorageKey = 'awsQuizChallenging_v1';
 const challengingApiUrl = '/api/challenging';
+const usersApiUrl = '/api/users';
+const questionFlagsApiUrl = '/api/question-flags';
+const userEmailStorageKey = 'awsQuizUserEmail_v1';
 const seenQuestionsStorageKey = 'awsQuizSeenQuestions_v1';
 const quizSettingsStorageKey = 'awsQuizSettings_v1';
 let challengingSet = new Set();
 let challengingConceptsByNumber = new Map();
 let seenQuestionsSet = new Set();
+let currentUserEmail = '';
+let questionFlagCache = new Map();
 
 let quizSettings = {
   noRepeatMode: true,
   removeChallengeOnCorrect: true
 };
 
-function loadChallengingLocal() {
+function normalizeEmail(emailValue) {
+  const email = String(emailValue || '').trim().toLowerCase();
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRe.test(email) ? email : '';
+}
+function getScopedStorageKey(baseKey) {
+  return currentUserEmail ? `${baseKey}::${currentUserEmail}` : `${baseKey}::anonymous`;
+}
+function getCurrentQuestionForActiveView() {
+  if (!document.getElementById('quizSection').classList.contains('hidden') && quizQuestions.length) {
+    return quizQuestions[quizIndex] || null;
+  }
+  if (filtered.length) {
+    return filtered[currentIndex] || null;
+  }
+  return null;
+}
+function renderFlagStatus(elementId, status) {
+  const el = document.getElementById(elementId);
+  const buttonMap = {
+    studyFlagStatus: document.getElementById('flagStudyQuestionBtn'),
+    quizFlagStatus: document.getElementById('flagQuizQuestionBtn')
+  };
+  const actionBtn = buttonMap[elementId] || null;
+  if (!status) {
+    el.textContent = 'Wrong-answer votes: 0';
+    if (actionBtn) actionBtn.textContent = 'Vote this answer is wrong (0)';
+    return;
+  }
+  if (actionBtn) actionBtn.textContent = `Vote this answer is wrong (${status.flagCount})`;
+  if (status.flagCount > 0 && status.flaggedByCurrentUser) {
+    el.textContent = `Wrong-answer votes: ${status.flagCount}. You voted on this question.`;
+    return;
+  }
+  if (status.flagCount > 0) {
+    el.textContent = `Wrong-answer votes: ${status.flagCount}.`;
+    return;
+  }
+  el.textContent = 'Wrong-answer votes: 0';
+}
+function updateAuthUiState() {
+  const signedIn = Boolean(currentUserEmail);
+  const badge = document.getElementById('currentUserBadge');
+  const message = document.getElementById('authMessage');
+  const saveBtn = document.getElementById('saveEmailBtn');
+
+  badge.textContent = signedIn ? currentUserEmail : 'Not signed in';
+  message.textContent = signedIn
+    ? 'Email locked for this session. Enter a different email and click Use Email to switch user context.'
+    : 'Enter your email to start using the app.';
+  saveBtn.textContent = signedIn ? 'Switch Email' : 'Use Email';
+
+  document.getElementById('searchBox').disabled = !signedIn;
+  document.getElementById('randomStudyBtn').disabled = !signedIn;
+  document.getElementById('switchModeBtn').disabled = !signedIn;
+  document.getElementById('startQuizBtn').disabled = !signedIn;
+  document.getElementById('markChallengingBtn').disabled = !signedIn;
+  document.getElementById('reviewChallengesBtn').disabled = !signedIn;
+  document.getElementById('exportChallengesCsvBtn').disabled = !signedIn;
+  document.getElementById('flagStudyQuestionBtn').disabled = !signedIn;
+  document.getElementById('flagQuizQuestionBtn').disabled = !signedIn;
+
+  if (!signedIn) {
+    document.getElementById('studySection').classList.add('hidden');
+    document.getElementById('quizSetupSection').classList.add('hidden');
+    document.getElementById('quizSection').classList.add('hidden');
+    document.getElementById('resultsSection').classList.add('hidden');
+  } else {
+    document.getElementById('studySection').classList.remove('hidden');
+    document.getElementById('quizSetupSection').classList.add('hidden');
+    document.getElementById('quizSection').classList.add('hidden');
+    document.getElementById('resultsSection').classList.add('hidden');
+    document.getElementById('switchModeBtn').textContent = 'Switch to Quiz Mode';
+  }
+}
+async function saveUserEmailAndRegister(email) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) {
+    alert('Enter a valid email address to continue.');
+    return false;
+  }
   try {
-    const raw = localStorage.getItem(challengingStorageKey);
+    const res = await fetch(usersApiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: normalizedEmail })
+    });
+    if (!res.ok) {
+      alert('Could not save your email right now. Please try again.');
+      return false;
+    }
+  } catch (err) {
+    alert('Could not save your email right now. Please try again.');
+    return false;
+  }
+
+  currentUserEmail = normalizedEmail;
+  localStorage.setItem(userEmailStorageKey, currentUserEmail);
+  challengingSet = new Set();
+  challengingConceptsByNumber = new Map();
+  seenQuestionsSet = new Set();
+  questionFlagCache = new Map();
+  loadQuizSettings();
+  applyQuizSettingsToUI();
+  loadSeenQuestions();
+  await hydrateChallenging();
+  updateFiltered();
+  return true;
+}
+function loadStoredUserEmail() {
+  const maybeEmail = normalizeEmail(localStorage.getItem(userEmailStorageKey) || '');
+  currentUserEmail = maybeEmail;
+}
+
+function loadChallengingLocal() {
+  if (!currentUserEmail) {
+    challengingSet = new Set();
+    return;
+  }
+  try {
+    const raw = localStorage.getItem(getScopedStorageKey(challengingStorageKey));
     if (!raw) return;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return;
@@ -283,11 +452,16 @@ function loadChallengingLocal() {
   }
 }
 function saveChallengingLocal() {
-  localStorage.setItem(challengingStorageKey, JSON.stringify([...challengingSet]));
+  if (!currentUserEmail) return;
+  localStorage.setItem(getScopedStorageKey(challengingStorageKey), JSON.stringify([...challengingSet]));
 }
 function loadSeenQuestions() {
+  if (!currentUserEmail) {
+    seenQuestionsSet = new Set();
+    return;
+  }
   try {
-    const raw = localStorage.getItem(seenQuestionsStorageKey);
+    const raw = localStorage.getItem(getScopedStorageKey(seenQuestionsStorageKey));
     if (!raw) return;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return;
@@ -297,11 +471,16 @@ function loadSeenQuestions() {
   }
 }
 function saveSeenQuestions() {
-  localStorage.setItem(seenQuestionsStorageKey, JSON.stringify([...seenQuestionsSet]));
+  if (!currentUserEmail) return;
+  localStorage.setItem(getScopedStorageKey(seenQuestionsStorageKey), JSON.stringify([...seenQuestionsSet]));
 }
 function loadQuizSettings() {
+  if (!currentUserEmail) {
+    quizSettings = { noRepeatMode: true, removeChallengeOnCorrect: true };
+    return;
+  }
   try {
-    const raw = localStorage.getItem(quizSettingsStorageKey);
+    const raw = localStorage.getItem(getScopedStorageKey(quizSettingsStorageKey));
     if (!raw) return;
     const parsed = JSON.parse(raw);
     quizSettings = {
@@ -313,7 +492,8 @@ function loadQuizSettings() {
   }
 }
 function saveQuizSettings() {
-  localStorage.setItem(quizSettingsStorageKey, JSON.stringify(quizSettings));
+  if (!currentUserEmail) return;
+  localStorage.setItem(getScopedStorageKey(quizSettingsStorageKey), JSON.stringify(quizSettings));
 }
 function applyQuizSettingsToUI() {
   document.getElementById('noRepeatToggle').checked = quizSettings.noRepeatMode;
@@ -345,8 +525,9 @@ function getLocalConceptItem(number) {
   };
 }
 async function fetchChallengingFromApi() {
+  if (!currentUserEmail) return false;
   try {
-    const res = await fetch(challengingApiUrl, { method: 'GET' });
+    const res = await fetch(`${challengingApiUrl}?email=${encodeURIComponent(currentUserEmail)}`, { method: 'GET' });
     if (!res.ok) return false;
     const payload = await res.json();
     const items = Array.isArray(payload.items) ? payload.items.map(normalizeConceptItem) : [];
@@ -359,11 +540,13 @@ async function fetchChallengingFromApi() {
   }
 }
 async function upsertChallengingToApi(question, addedFrom) {
+  if (!currentUserEmail) return;
   try {
     const res = await fetch(challengingApiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        email: currentUserEmail,
         number: question.number,
         question: question.question,
         explanation: question.explanation || '',
@@ -383,11 +566,106 @@ async function upsertChallengingToApi(question, addedFrom) {
   }
 }
 async function removeChallengingFromApi(questionNumber) {
+  if (!currentUserEmail) return;
   try {
-    await fetch(`${challengingApiUrl}?number=${encodeURIComponent(questionNumber)}`, { method: 'DELETE' });
+    await fetch(`${challengingApiUrl}?number=${encodeURIComponent(questionNumber)}&email=${encodeURIComponent(currentUserEmail)}`, { method: 'DELETE' });
   } catch (err) {
     // Keep local state even when API is temporarily unavailable.
   }
+}
+async function fetchQuestionFlagStatus(questionNumber) {
+  if (!currentUserEmail || !Number.isFinite(questionNumber)) return null;
+  if (questionFlagCache.has(questionNumber)) {
+    return questionFlagCache.get(questionNumber);
+  }
+  try {
+    const res = await fetch(`${questionFlagsApiUrl}?number=${encodeURIComponent(questionNumber)}&email=${encodeURIComponent(currentUserEmail)}`, {
+      method: 'GET'
+    });
+    if (!res.ok) return null;
+    const payload = await res.json();
+    const status = {
+      questionNumber,
+      flagCount: Number(payload.flagCount) || 0,
+      flaggedByCurrentUser: Boolean(payload.flaggedByCurrentUser)
+    };
+    questionFlagCache.set(questionNumber, status);
+    return status;
+  } catch (err) {
+    return null;
+  }
+}
+async function reportQuestionFlag(question, sourceLabel) {
+  if (!currentUserEmail || !question) {
+    alert('Enter your email first.');
+    return;
+  }
+  try {
+    const res = await fetch(questionFlagsApiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: currentUserEmail,
+        number: question.number,
+        reason: `Flagged from ${sourceLabel}`
+      })
+    });
+    if (!res.ok) {
+      alert('Could not report this question right now.');
+      return;
+    }
+    const payload = await res.json();
+    const status = {
+      questionNumber: question.number,
+      flagCount: Number(payload.flagCount) || 0,
+      flaggedByCurrentUser: true
+    };
+    questionFlagCache.set(question.number, status);
+    renderFlagStatus('studyFlagStatus', status);
+    renderFlagStatus('quizFlagStatus', status);
+    document.querySelectorAll(`.wrongVoteCount[data-question="${question.number}"]`).forEach((el) => {
+      el.textContent = `Votes: ${status.flagCount}`;
+    });
+    alert('Thanks. This question was flagged for review.');
+  } catch (err) {
+    alert('Could not report this question right now.');
+  }
+}
+async function refreshWrongAnswerVoteCounts() {
+  const voteEls = [...document.querySelectorAll('.wrongVoteCount')];
+  if (!voteEls.length || !currentUserEmail) return;
+
+  const uniqueNumbers = [...new Set(voteEls.map((el) => Number(el.getAttribute('data-question'))).filter((n) => Number.isFinite(n)))];
+  const statuses = await Promise.all(uniqueNumbers.map((questionNumber) => fetchQuestionFlagStatus(questionNumber)));
+  const statusByNumber = new Map();
+  uniqueNumbers.forEach((num, idx) => {
+    const status = statuses[idx];
+    statusByNumber.set(num, status || { questionNumber: num, flagCount: 0, flaggedByCurrentUser: false });
+  });
+
+  voteEls.forEach((el) => {
+    const number = Number(el.getAttribute('data-question'));
+    const status = statusByNumber.get(number);
+    el.textContent = `Votes: ${status ? status.flagCount : 0}`;
+  });
+}
+async function refreshStudyFlagStatus() {
+  if (!filtered.length) {
+    renderFlagStatus('studyFlagStatus', null);
+    return;
+  }
+  const q = filtered[currentIndex];
+  const status = await fetchQuestionFlagStatus(q.number);
+  renderFlagStatus('studyFlagStatus', status);
+}
+async function refreshQuizFlagStatus() {
+  if (!quizQuestions.length || quizIndex >= quizQuestions.length) {
+    renderFlagStatus('quizFlagStatus', null);
+    return;
+  }
+  const q = quizQuestions[quizIndex];
+  const status = await fetchQuestionFlagStatus(q.number);
+  renderFlagStatus('quizFlagStatus', status);
 }
 function getChallengeItemsForDisplay() {
   if (challengingConceptsByNumber.size) {
@@ -573,6 +851,7 @@ function renderStudy() {
     document.getElementById('studyQCount').textContent = '0 results';
     document.getElementById('studyQuestionText').textContent = 'No questions found.';
     document.getElementById('studyOptionsBox').innerHTML = '';
+    renderFlagStatus('studyFlagStatus', null);
     setChallengeButtonState();
     return;
   }
@@ -591,6 +870,7 @@ function renderStudy() {
   document.getElementById('studyAnswerText').textContent = answerLabel(q);
   document.getElementById('studyExplanationText').textContent = q.explanation || 'No explanation found.';
   setChallengeButtonState();
+  void refreshStudyFlagStatus();
 }
 function switchMode(showQuizSetup) {
   document.getElementById('studySection').classList.toggle('hidden', showQuizSetup);
@@ -600,6 +880,10 @@ function switchMode(showQuizSetup) {
   document.getElementById('switchModeBtn').textContent = showQuizSetup ? 'Back to Study Mode' : 'Switch to Quiz Mode';
 }
 function startQuiz() {
+  if (!currentUserEmail) {
+    alert('Enter your email before starting a quiz.');
+    return;
+  }
   const source = document.getElementById('quizSource').value;
   const order = document.getElementById('quizOrder').value;
   const requested = Math.max(1, parseInt(document.getElementById('quizCount').value || '20', 10));
@@ -661,6 +945,7 @@ function renderQuizQuestion() {
   document.getElementById('quizExplanation').innerHTML = '';
   document.getElementById('submitAnswerBtn').disabled = false;
   document.getElementById('nextQuizBtn').disabled = true;
+  void refreshQuizFlagStatus();
 }
 function submitCurrentAnswer() {
   if (answeredCurrent) return;
@@ -750,9 +1035,14 @@ function renderWrongAnswers() {
       <div class="small" style="margin-bottom:8px;"><strong>Correct answer:</strong> ${escapeHtml(item.correctAnswer.join(', '))}</div>
       <div style="margin-top:8px;">${item.options.map(opt => `<div style="margin:4px 0;">${escapeHtml(opt.letter)}. ${escapeHtml(opt.text)}</div>`).join('')}</div>
       <div class="explain" style="margin-top:12px;"><strong>Explanation:</strong><br>${escapeHtml(item.explanation || 'No explanation found.')}</div>
+      <div style="margin-top:8px;">
+        <button class="link-button reportWrongAnswerBtn" data-question="${escapeHtml(item.number)}" type="button">Vote this answer is wrong</button>
+        <span class="small wrongVoteCount" data-question="${escapeHtml(item.number)}" style="margin-left:10px;">Votes: 0</span>
+      </div>
     </div>
   `).join('');
   box.classList.remove('hidden');
+  void refreshWrongAnswerVoteCounts();
 }
 
 document.getElementById('searchBox').addEventListener('input', updateFiltered);
@@ -760,6 +1050,16 @@ document.getElementById('studyPrevBtn').addEventListener('click', () => { curren
 document.getElementById('studyNextBtn').addEventListener('click', () => { currentIndex = Math.min(filtered.length - 1, currentIndex + 1); renderStudy(); });
 document.getElementById('randomStudyBtn').addEventListener('click', () => { if (filtered.length) { currentIndex = Math.floor(Math.random() * filtered.length); renderStudy(); } });
 document.getElementById('markChallengingBtn').addEventListener('click', toggleCurrentChallenge);
+document.getElementById('flagStudyQuestionBtn').addEventListener('click', async () => {
+  const q = filtered[currentIndex];
+  if (!q) return;
+  await reportQuestionFlag(q, 'study-mode');
+});
+document.getElementById('flagQuizQuestionBtn').addEventListener('click', async () => {
+  const q = quizQuestions[quizIndex];
+  if (!q) return;
+  await reportQuestionFlag(q, 'quiz-mode');
+});
 document.getElementById('exportChallengesCsvBtn').addEventListener('click', exportChallengesCsv);
 document.getElementById('noRepeatToggle').addEventListener('change', (event) => {
   quizSettings.noRepeatMode = event.target.checked;
@@ -791,12 +1091,36 @@ document.getElementById('quitQuizBtn').addEventListener('click', finishQuiz);
 document.getElementById('reviewWrongBtn').addEventListener('click', renderWrongAnswers);
 document.getElementById('restartQuizBtn').addEventListener('click', () => { switchMode(true); });
 document.getElementById('backToStudyBtn').addEventListener('click', () => { switchMode(false); });
+document.getElementById('wrongAnswersBox').addEventListener('click', async (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (!target.classList.contains('reportWrongAnswerBtn')) return;
+  const questionNumber = Number(target.getAttribute('data-question'));
+  if (!Number.isFinite(questionNumber)) return;
+  const question = findQuestionByNumber(questionNumber);
+  if (!question) return;
+  await reportQuestionFlag(question, 'wrong-answer-review');
+});
+document.getElementById('saveEmailBtn').addEventListener('click', async () => {
+  const input = document.getElementById('emailInput');
+  const ok = await saveUserEmailAndRegister(input.value);
+  if (!ok) return;
+  input.value = currentUserEmail;
+  updateAuthUiState();
+  renderStudy();
+});
 
-loadQuizSettings();
-applyQuizSettingsToUI();
-loadSeenQuestions();
-void hydrateChallenging();
-renderStudy();
+loadStoredUserEmail();
+updateAuthUiState();
+
+if (currentUserEmail) {
+  document.getElementById('emailInput').value = currentUserEmail;
+  loadQuizSettings();
+  applyQuizSettingsToUI();
+  loadSeenQuestions();
+  void hydrateChallenging();
+  renderStudy();
+}
 </script>
 </body>
 </html>
