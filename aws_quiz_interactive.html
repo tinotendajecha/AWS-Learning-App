@@ -161,6 +161,87 @@
     font-weight:700;
   }
   .divider { height:1px; background:var(--border); margin:18px 0; }
+  .auth-card {
+    background:linear-gradient(180deg, #ffffff, #f8fafc);
+    color:var(--text);
+    border-radius:28px;
+    padding:32px;
+    box-shadow:0 20px 50px rgba(2, 6, 23, 0.4);
+    max-width:400px;
+    text-align:center;
+    position:fixed;
+    top:50%;
+    left:50%;
+    transform:translate(-50%, -50%);
+    z-index:1001;
+    margin:0;
+  }
+  .auth-card h2 {
+    font-size:28px;
+    font-weight:700;
+    margin:0 0 8px;
+    color:#0f172a;
+  }
+  .auth-subtitle {
+    color:#64748b;
+    font-size:14px;
+    margin-bottom:24px;
+    margin-top:0;
+  }
+  .auth-input {
+    width:100%;
+    padding:14px 16px;
+    margin-bottom:14px;
+    border-radius:14px;
+    border:none;
+    background:#dbeafe;
+    color:#0f172a;
+    font-size:15px;
+    font-weight:500;
+  }
+  .auth-input::placeholder {
+    color:#94a3b8;
+  }
+  .auth-input:focus {
+    outline:none;
+    background:#bfdbfe;
+    box-shadow:0 0 0 3px rgba(59, 130, 246, 0.1);
+  }
+  .auth-button {
+    width:100%;
+    padding:14px;
+    background:linear-gradient(120deg, #ea580c, #fb923c);
+    color:#fff;
+    border:none;
+    border-radius:14px;
+    font-size:16px;
+    font-weight:700;
+    cursor:pointer;
+    transition:0.2s;
+    box-shadow:0 4px 15px rgba(234, 88, 12, 0.3);
+  }
+  .auth-button:hover {
+    transform:translateY(-2px);
+    box-shadow:0 6px 20px rgba(234, 88, 12, 0.4);
+  }
+  .auth-button:active {
+    transform:translateY(0);
+  }
+  .auth-overlay {
+    position:fixed;
+    top:0;
+    left:0;
+    right:0;
+    bottom:0;
+    background:rgba(0, 0, 0, 0.7);
+    backdrop-filter:blur(12px);
+    z-index:999;
+    pointer-events:none;
+  }
+  .panel {
+    position:relative;
+    z-index:1000;
+  }
   @media (max-width: 860px) {
     .controls, .setup-grid, .stat-grid, .toggle-grid, .auth-row { grid-template-columns:1fr 1fr; }
     .question { font-size:21px; }
@@ -176,6 +257,16 @@
 </head>
 <body>
 <div class="wrap">
+  <div id="authOverlay" class="auth-overlay"></div>
+  <div class="auth-card">
+    <h2 style="margin-bottom: 8px;">Welcome to AWS Quiz</h2>
+    <p class="auth-subtitle">Please enter your CTU student details to continue.</p>
+    <input id="nameInput" type="text" placeholder="Enter your full name" autocomplete="name" class="auth-input" />
+    <input id="emailInput" type="email" placeholder="Enter your email" autocomplete="email" class="auth-input" />
+    <button id="saveEmailBtn" type="button" class="auth-button">Start Learning</button>
+    <div id="currentUserBadge" class="user-badge" style="margin-top: 16px; width: 100%;">Not signed in</div>
+    <p class="small" id="authMessage" style="margin-top:10px; color:#fde68a;">Enter your details to start using the app.</p>
+  </div>
   <div class="panel">
     <h1>AWS Interactive Quiz</h1>
     <p class="sub">Practice by selecting answers, submitting each question, and seeing your final score at the end. You can also review every question you got wrong.</p>
@@ -184,12 +275,6 @@
       <button class="secondary" id="randomStudyBtn" type="button">Random</button>
       <button class="ghost" id="switchModeBtn" type="button">Switch to Quiz Mode</button>
     </div>
-    <div class="auth-row">
-      <input id="emailInput" type="email" placeholder="Enter your email to use the app" autocomplete="email" />
-      <button id="saveEmailBtn" type="button">Use Email</button>
-      <div id="currentUserBadge" class="user-badge">Not signed in</div>
-    </div>
-    <p class="small" id="authMessage" style="margin-top:10px; color:#fde68a;">Enter your email to start using the app.</p>
   </div>
 
   <section id="studySection" class="card">
@@ -368,11 +453,11 @@ function updateAuthUiState() {
   const message = document.getElementById('authMessage');
   const saveBtn = document.getElementById('saveEmailBtn');
 
-  badge.textContent = signedIn ? currentUserEmail : 'Not signed in';
-  message.textContent = signedIn
+  if (badge) badge.textContent = signedIn ? currentUserEmail : 'Not signed in';
+  if (message) message.textContent = signedIn
     ? 'Email locked for this session. Enter a different email and click Use Email to switch user context.'
     : 'Enter your email to start using the app.';
-  saveBtn.textContent = signedIn ? 'Switch Email' : 'Use Email';
+  if (saveBtn) saveBtn.textContent = signedIn ? 'Switch Email' : 'Start Learning';
 
   document.getElementById('searchBox').disabled = !signedIn;
   document.getElementById('randomStudyBtn').disabled = !signedIn;
@@ -397,24 +482,32 @@ function updateAuthUiState() {
     document.getElementById('switchModeBtn').textContent = 'Switch to Quiz Mode';
   }
 }
-async function saveUserEmailAndRegister(email) {
+async function saveUserEmailAndRegister(fullName, email) {
   const normalizedEmail = normalizeEmail(email);
+  const trimmedName = String(fullName || '').trim();
+  
   if (!normalizedEmail) {
     alert('Enter a valid email address to continue.');
     return false;
   }
+  if (!trimmedName) {
+    alert('Please enter your full name to continue.');
+    return false;
+  }
+  
   try {
     const res = await fetch(usersApiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: normalizedEmail })
+      body: JSON.stringify({ email: normalizedEmail, fullName: trimmedName })
     });
     if (!res.ok) {
-      alert('Could not save your email right now. Please try again.');
+      const errData = await res.json().catch(() => ({}));
+      alert(errData.error || 'Could not save your details right now. Please try again.');
       return false;
     }
   } catch (err) {
-    alert('Could not save your email right now. Please try again.');
+    alert('Could not save your details right now. Please try again.');
     return false;
   }
 
@@ -1102,10 +1195,11 @@ document.getElementById('wrongAnswersBox').addEventListener('click', async (even
   await reportQuestionFlag(question, 'wrong-answer-review');
 });
 document.getElementById('saveEmailBtn').addEventListener('click', async () => {
-  const input = document.getElementById('emailInput');
-  const ok = await saveUserEmailAndRegister(input.value);
+  const emailInput = document.getElementById('emailInput');
+  const nameInput = document.getElementById('nameInput');
+  const ok = await saveUserEmailAndRegister(nameInput.value, emailInput.value);
   if (!ok) return;
-  input.value = currentUserEmail;
+  emailInput.value = currentUserEmail;
   updateAuthUiState();
   renderStudy();
 });

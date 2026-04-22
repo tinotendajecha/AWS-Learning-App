@@ -3,11 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "description": "AWS learning quiz with Vercel API + Turso persistence",
-  "scripts": {
-    "dev": "echo Use npx vercel dev",
-    "start": "echo Use npx vercel dev"
-  },
+  "scripts": {},
   "dependencies": {
     "@libsql/client": "^0.14.0"
   }
 }
+
+

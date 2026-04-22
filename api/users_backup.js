@@ -86,7 +86,7 @@ module.exports = async function handler(req, res) {
     await client.execute({
       sql: `
         INSERT INTO app_users (email, full_name, created_at, last_seen_at)
-        VALUES (?, ?, ?, ?)
+      VALUES (?, ?, ?, ?)
         ON CONFLICT(email) DO UPDATE SET
           last_seen_at = excluded.last_seen_at
       `,
@@ -94,7 +94,7 @@ module.exports = async function handler(req, res) {
     });
 
     const result = await client.execute({
-      sql: 'SELECT id, email, full_name, created_at, last_seen_at FROM app_users WHERE email = ? LIMIT 1',
+      sql: 'SELECT id, email, created_at, last_seen_at FROM app_users WHERE email = ? LIMIT 1',
       args: [email]
     });
 
@@ -108,7 +108,6 @@ module.exports = async function handler(req, res) {
       user: {
         id: Number(user.id),
         email: String(user.email),
-        fullName: String(user.full_name),
         createdAt: String(user.created_at),
         lastSeenAt: String(user.last_seen_at)
       }
@@ -120,4 +119,6 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
+
 
