@@ -1,0 +1,261 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SelectionType {
+  SINGLE
+  MULTI
+}
+
+enum ChallengeSource {
+  MANUAL
+  WRONG_ANSWER
+}
+
+enum QuizSource {
+  ALL
+  FILTERED
+  CHALLENGING
+}
+
+enum QuizOrder {
+  RANDOM
+  SEQUENTIAL
+}
+
+enum QuizAttemptStatus {
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
+enum HotSeatSessionStatus {
+  LOBBY
+  ACTIVE
+  COMPLETED
+}
+
+enum HotSeatSelectionMode {
+  RANDOM
+  FAIR
+}
+
+model Learner {
+  id             String                 @id @default(cuid())
+  anonymousKey   String                 @unique
+  email          String?                @unique
+  name           String?
+  externalAuthId String?                @unique
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  lastSeenAt     DateTime               @default(now())
+  preferences    LearnerPreference?
+  questionStates LearnerQuestionState[]
+  quizAttempts   QuizAttempt[]
+  hotSeatSessionsOwned HotSeatSession[]      @relation("HotSeatTeacher")
+  hotSeatParticipants  HotSeatParticipant[]
+}
+
+model LearnerPreference {
+  learnerId                String   @id
+  learner                  Learner  @relation(fields: [learnerId], references: [id], onDelete: Cascade)
+  noRepeatMode             Boolean  @default(true)
+  removeChallengeOnCorrect Boolean  @default(true)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+}
+
+model Question {
+  id             String                 @id @default(cuid())
+  examCode       String                 @default("AWS-CLF-C02")
+  number         Int
+  prompt         String
+  explanation    String
+  selectionType  SelectionType
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  options        QuestionOption[]
+  learnerStates  LearnerQuestionState[]
+  quizAttemptItems QuizAttemptItem[]
+  hotSeatSessionQuestions HotSeatSessionQuestion[]
+  hotSeatResponses HotSeatResponse[]
+
+  @@unique([examCode, number])
+  @@index([examCode, number])
+}
+
+model QuestionOption {
+  id         String   @id @default(cuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  letter     String
+  text       String
+  position   Int
+  isCorrect  Boolean  @default(false)
+
+  @@unique([questionId, letter])
+  @@index([questionId, position])
+}
+
+model LearnerQuestionState {
+  learnerId                 String
+  questionId                String
+  learner                   Learner          @relation(fields: [learnerId], references: [id], onDelete: Cascade)
+  question                  Question         @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  isChallenging             Boolean          @default(false)
+  challengingSource         ChallengeSource?
+  challengingUpdatedAt      DateTime?
+  timesSeen                 Int              @default(0)
+  timesAnswered             Int              @default(0)
+  timesCorrect              Int              @default(0)
+  lastSeenAt                DateTime?
+  lastAnsweredAt            DateTime?
+  lastAnsweredCorrectlyAt   DateTime?
+  createdAt                 DateTime         @default(now())
+  updatedAt                 DateTime         @updatedAt
+
+  @@id([learnerId, questionId])
+  @@index([learnerId, isChallenging])
+}
+
+model QuizAttempt {
+  id                        String            @id @default(cuid())
+  learnerId                 String
+  learner                   Learner           @relation(fields: [learnerId], references: [id], onDelete: Cascade)
+  examCode                  String            @default("AWS-CLF-C02")
+  source                    QuizSource
+  order                     QuizOrder
+  filterQuery               String?
+  requestedCount            Int
+  actualCount               Int
+  noRepeatMode              Boolean
+  removeChallengeOnCorrect  Boolean
+  status                    QuizAttemptStatus @default(IN_PROGRESS)
+  score                     Int               @default(0)
+  correctCount              Int               @default(0)
+  wrongCount                Int               @default(0)
+  startedAt                 DateTime          @default(now())
+  completedAt               DateTime?
+  createdAt                 DateTime          @default(now())
+  updatedAt                 DateTime          @updatedAt
+  items                     QuizAttemptItem[]
+
+  @@index([learnerId, examCode, startedAt])
+}
+
+model QuizAttemptItem {
+  id                    String      @id @default(cuid())
+  attemptId             String
+  questionId            String
+  attempt               QuizAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question              Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  orderIndex            Int
+  selectedOptionLetters String[]    @default([])
+  isCorrect             Boolean?
+  answeredAt            DateTime?
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  @@unique([attemptId, orderIndex])
+  @@unique([attemptId, questionId])
+}
+
+model HotSeatSession {
+  id                 String               @id @default(cuid())
+  code               String               @unique
+  teacherLearnerId   String
+  teacher            Learner              @relation("HotSeatTeacher", fields: [teacherLearnerId], references: [id], onDelete: Cascade)
+  examCode           String               @default("AWS-CLF-C02")
+  title              String?
+  status             HotSeatSessionStatus @default(LOBBY)
+  source             QuizSource
+  order              QuizOrder
+  filterQuery        String?
+  requestedCount     Int
+  actualCount        Int
+  timerSeconds       Int                  @default(45)
+  selectionMode      HotSeatSelectionMode @default(FAIR)
+  basePoints         Int                  @default(10)
+  speedBonusEnabled  Boolean              @default(false)
+  maxSpeedBonus      Int                  @default(5)
+  currentQuestionIndex Int                @default(-1)
+  currentQuestionStartedAt DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  startedAt          DateTime?
+  completedAt        DateTime?
+  participants       HotSeatParticipant[]
+  sessionQuestions   HotSeatSessionQuestion[]
+  responses          HotSeatResponse[]
+
+  @@index([teacherLearnerId, createdAt])
+  @@index([code, status])
+}
+
+model HotSeatParticipant {
+  id             String             @id @default(cuid())
+  sessionId      String
+  learnerId      String
+  displayName    String
+  score          Int                @default(0)
+  correctAnswers Int                @default(0)
+  timesSelected  Int                @default(0)
+  joinedAt       DateTime           @default(now())
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  session        HotSeatSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  learner        Learner            @relation(fields: [learnerId], references: [id], onDelete: Cascade)
+  assignedQuestions HotSeatSessionQuestion[] @relation("HotSeatAssignedParticipant")
+  responses      HotSeatResponse[]
+
+  @@unique([sessionId, learnerId])
+  @@index([sessionId, score])
+}
+
+model HotSeatSessionQuestion {
+  id                    String              @id @default(cuid())
+  sessionId             String
+  questionId            String
+  orderIndex            Int
+  assignedParticipantId String?
+  askedAt               DateTime?
+  answeredAt            DateTime?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  session               HotSeatSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question              Question            @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  assignedParticipant   HotSeatParticipant? @relation("HotSeatAssignedParticipant", fields: [assignedParticipantId], references: [id], onDelete: SetNull)
+  response              HotSeatResponse?
+
+  @@unique([sessionId, orderIndex])
+  @@unique([sessionId, questionId])
+  @@index([sessionId, assignedParticipantId])
+}
+
+model HotSeatResponse {
+  id                  String               @id @default(cuid())
+  sessionId           String
+  sessionQuestionId   String               @unique
+  participantId       String
+  questionId          String
+  selectedOptionLetters String[]           @default([])
+  isCorrect           Boolean              @default(false)
+  wasTimedOut         Boolean              @default(false)
+  timeTakenSeconds    Int?
+  pointsAwarded       Int                  @default(0)
+  speedBonusPoints    Int                  @default(0)
+  answeredAt          DateTime?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  session             HotSeatSession       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionQuestion     HotSeatSessionQuestion @relation(fields: [sessionQuestionId], references: [id], onDelete: Cascade)
+  participant         HotSeatParticipant   @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  question            Question             @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, participantId])
+}

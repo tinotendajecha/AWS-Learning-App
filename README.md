@@ -1,49 +1,94 @@
-# AWS Learning App (Vercel + Turso)
+# AWS Learning App
 
-This app is a mobile-friendly AWS quiz page with persistent "challenging concepts" storage.
+This project is now a Next.js App Router + TypeScript study app with Prisma and PostgreSQL.
 
-## What is persisted
+## What it does
 
-When you mark a study question as challenging, or answer a quiz question incorrectly, it is saved in Turso via:
+- Study mode for browsing and searching the question bank
+- Quiz mode with:
+  - filtered, all-question, and challenging-only sources
+  - random or sequential order
+  - no-repeat behavior until the current exam bank is exhausted
+  - auto-marking wrong answers as challenging
+  - optional auto-removal of challenging questions after a correct answer
+- Results pages with wrong-answer review
+- CSV export of challenging concepts
+- Structured request logging with request IDs
 
-- `POST /api/challenging` to upsert concept
-- `GET /api/challenging` to load concepts
-- `DELETE /api/challenging?number=<questionNumber>` to remove
+## Question bank
 
-## Local development
+- Runtime questions are loaded from PostgreSQL through Prisma.
+- The legacy browser bundle has been converted into seed input at `prisma/seed/questions.json`.
+- The current default exam code is controlled by `DEFAULT_EXAM_CODE`.
+- The schema is already scoped for future multi-exam support, so adding banks like DP-900 later will not require a redesign.
 
-1. Install dependencies:
+## Environment variables
 
-```bash
-npm install
-```
-
-2. Create `.env.local` from `.env.example` and fill values:
+Copy `.env.example` to `.env.local` and update values:
 
 ```bash
 cp .env.example .env.local
 ```
 
-3. Run Vercel dev server:
+Required:
+
+- `DATABASE_URL`
+
+Optional:
+
+- `DEFAULT_EXAM_CODE` defaults to `AWS-CLF-C02`
+- `LOG_LEVEL` defaults to `info`
+
+## Local development
+
+1. Install dependencies
 
 ```bash
-npx vercel dev
+npm install
 ```
 
-4. Open `http://localhost:3000`
+2. Generate the Prisma client
 
-## Deploy to Vercel
+```bash
+npm run prisma:generate
+```
 
-1. Push this folder to GitHub.
-2. Import the repo in Vercel.
-3. Add environment variables in Vercel project settings:
-   - `TURSO_DATABASE_URL`
-   - `TURSO_AUTH_TOKEN`
-4. Deploy.
+3. Push the schema to PostgreSQL
 
-The root route (`/`) is rewritten to `aws_quiz_interactive.html`.
+```bash
+npm run db:push
+```
 
-## Notes
+4. Seed the question bank
 
-- If Turso is unavailable, the page still keeps local browser fallback for your current device.
-- Cross-device persistence works when the API can reach Turso successfully.
+```bash
+npm run prisma:seed
+```
+
+5. Start the app
+
+```bash
+npm run dev
+```
+
+Open `http://localhost:3000`.
+
+## Useful scripts
+
+```bash
+npm run dev
+npm run build
+npm run start
+npm run test
+npm run prisma:generate
+npm run prisma:seed
+npm run db:push
+```
+
+## Project shape
+
+- `src/app`: App Router pages and route handlers
+- `src/features`: client-side study, quiz, challenging, and preference logic
+- `src/server`: repositories and services
+- `src/lib`: Prisma, logging, validation, and request context helpers
+- `prisma`: schema and seed assets
