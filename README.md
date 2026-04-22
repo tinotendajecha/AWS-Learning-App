@@ -61,6 +61,7 @@ npm run db:push
 
 4. Seed the question bank
 
+<<<<<<< HEAD
 ```bash
 npm run prisma:seed
 ```
@@ -92,3 +93,8 @@ npm run db:push
 - `src/server`: repositories and services
 - `src/lib`: Prisma, logging, validation, and request context helpers
 - `prisma`: schema and seed assets
+=======
+- If Turso is unavailable, the page still keeps local browser fallback for your current device.
+- Cross-device persistence works when the API can reach Turso successfully.
+- Local browser fallback is now scoped by email so different users on the same device do not mix challenging history.
+>>>>>>> d86e061bb21cceb40a0dbb9e934c6de90cd8b808
